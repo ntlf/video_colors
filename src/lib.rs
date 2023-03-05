@@ -100,14 +100,16 @@ pub fn extract_colors_threaded(input: &str) -> Vec<[u8; 3]> {
 
     drop(tx);
 
-    for (i, _) in rx.iter().enumerate() {
+    let mut messages = vec![];
+
+    for (i, m) in rx.iter().enumerate() {
         print!(
             "{:.2}%\r",
             i as f64 / (frame_count as f64 / fps as f64) * 100.0
         );
-    }
 
-    let mut messages = rx.iter().collect::<Vec<_>>();
+        messages.push(m);
+    }
 
     messages.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -166,14 +168,16 @@ pub fn extract_colors_threaded_chunks(input: &str) -> Vec<[u8; 3]> {
 
     drop(tx);
 
-    for (i, _) in rx.iter().enumerate() {
+    let mut messages = vec![];
+
+    for (i, m) in rx.iter().enumerate() {
         print!(
             "{:.2}%\r",
             i as f64 / (frame_count as f64 / fps as f64) * 100.0
         );
-    }
 
-    let mut messages = rx.iter().collect::<Vec<_>>();
+        messages.push(m);
+    }
 
     messages.sort_by(|a, b| a.0.cmp(&b.0));
 
