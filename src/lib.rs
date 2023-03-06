@@ -2,6 +2,7 @@ use opencv::core::no_array;
 use opencv::imgproc::{self, COLOR_BGR2RGB};
 use opencv::prelude::*;
 use opencv::videoio::{VideoCapture, CAP_PROP_FPS, CAP_PROP_FRAME_COUNT, CAP_PROP_POS_FRAMES};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -17,8 +18,17 @@ fn get_frame_color(frame: &Mat) -> [u8; 3] {
     [mean[0] as u8, mean[1] as u8, mean[2] as u8]
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct Json {
+    colors: Vec<[u8; 3]>,
+}
+
 pub fn write_colors_to_file(colors: &Vec<[u8; 3]>, path: &str) {
-    fs::write(path, serde_json::to_string(&colors).unwrap()).unwrap();
+    let json = Json {
+        colors: colors.to_owned(),
+    };
+
+    fs::write(path, serde_json::to_string(&json).unwrap()).unwrap();
 }
 
 fn get_video_info(video: &VideoCapture) -> (i32, i32) {
