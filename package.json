@@ -1,0 +1,14 @@
+{
+  "name": "video_colors",
+  "module": "index.ts",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^18.15.0",
+    "tsx": "^3.12.3"
+  },
+  "dependencies": {
+    "trianglify": "^4.1.1"
+  }
+}
