@@ -97,13 +97,16 @@ pub fn extract_colors_threaded(input: &str) -> Vec<[u8; 3]> {
             if i % fps == 0 {
                 let mut frame = Mat::default();
 
-                video.lock().unwrap().read(&mut frame).unwrap();
+                let mut v = video.lock().unwrap();
+
+                v.set(CAP_PROP_POS_FRAMES, i as f64).unwrap();
+                v.read(&mut frame).unwrap();
+
+                drop(v);
 
                 let color = get_frame_color(&frame);
 
                 tx.send((i, color)).unwrap();
-            } else {
-                video.lock().unwrap().grab().unwrap();
             }
         });
     }
