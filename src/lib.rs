@@ -2,6 +2,7 @@ use opencv::core::no_array;
 use opencv::imgproc::{self, COLOR_BGR2RGB};
 use opencv::prelude::*;
 use opencv::videoio::{VideoCapture, CAP_PROP_FPS, CAP_PROP_FRAME_COUNT, CAP_PROP_POS_FRAMES};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::mpsc;
@@ -191,6 +192,54 @@ pub fn extract_colors_threaded_chunks(input: &str) -> Vec<[u8; 3]> {
     let colors = messages
         .iter()
         .map(|(_, color)| color.to_owned())
+        .collect::<Vec<_>>();
+
+    colors
+}
+
+pub fn extract_colors_threaded_rayon(input: &str) -> Vec<[u8; 3]> {
+    let video = VideoCapture::from_file(input, 0).unwrap();
+    let (fps, frame_count) = get_video_info(&video);
+
+    debug!(fps, frame_count);
+
+    let n_workers = std::thread::available_parallelism().unwrap().get() - 1;
+
+    let chunks = (0..frame_count)
+        .collect::<Vec<_>>()
+        .par_chunks((frame_count as usize / n_workers) + 1)
+        .map(|chunk| chunk.to_owned())
+        .collect::<Vec<_>>();
+
+    debug!(chunks = ?(chunks.iter().map(|chunk| (chunk[0]..chunk[chunk.len() - 1])).collect::<Vec<_>>()));
+
+    let colors = chunks
+        .par_iter()
+        .flat_map(|chunk| {
+            let mut video = VideoCapture::from_file(input, 0).unwrap();
+            video.set(CAP_PROP_POS_FRAMES, chunk[0] as f64).unwrap();
+
+            debug!(chunk = ?(chunk[0]..chunk[chunk.len() - 1]));
+
+            let mut chunk_colors = vec![];
+
+            chunk.iter().for_each(|i| {
+                if i % fps == 0 {
+                    let mut frame = Mat::default();
+                    video.read(&mut frame).unwrap();
+
+                    let color = get_frame_color(&frame);
+
+                    trace!(i, ?color);
+
+                    chunk_colors.push(color);
+                } else {
+                    video.grab().unwrap();
+                }
+            });
+
+            chunk_colors
+        })
         .collect::<Vec<_>>();
 
     colors

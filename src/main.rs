@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{debug, info, Level};
 use video_colors::{
-    extract_colors, extract_colors_threaded, extract_colors_threaded_chunks, write_colors_to_file,
+    extract_colors, extract_colors_threaded, extract_colors_threaded_chunks,
+    extract_colors_threaded_rayon, write_colors_to_file,
 };
 
 #[derive(Parser)]
@@ -23,6 +24,10 @@ struct Cli {
     /// Use threaded version of color extraction with chunks
     #[arg(short, long)]
     chunks: bool,
+
+    /// Use threaded rayon version of color extraction
+    #[arg(short, long)]
+    rayon: bool,
 
     /// Turn debugging information on
     #[arg(short, long, action = clap::ArgAction::Count)]
@@ -60,11 +65,14 @@ fn main() {
         input,
         output,
         threaded = args.threaded,
-        chunks = args.chunks
+        chunks = args.chunks,
+        rayon = args.rayon
     );
 
     let colors = if args.threaded {
-        if args.chunks {
+        if args.rayon {
+            extract_colors_threaded_rayon(&input)
+        } else if args.chunks {
             extract_colors_threaded_chunks(&input)
         } else {
             extract_colors_threaded(&input)
