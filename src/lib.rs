@@ -142,16 +142,21 @@ pub fn extract_colors_threaded_chunks(input: &str) -> Vec<[u8; 3]> {
     let video = VideoCapture::from_file(input, 0).unwrap();
     let (fps, frame_count) = get_video_info(&video);
 
-    debug!(fps, frame_count);
+    let min_chunk_size = fps * 90;
+    let number_of_chunks = std::cmp::min(
+        std::thread::available_parallelism().unwrap().get() - 1,
+        (frame_count as f64 / min_chunk_size as f64).ceil() as usize,
+    );
 
-    let n_workers = std::thread::available_parallelism().unwrap().get() - 1;
-    let pool = ThreadPool::new(n_workers);
+    debug!(fps, frame_count, number_of_chunks);
+
+    let pool = ThreadPool::new(number_of_chunks);
 
     let (tx, rx) = mpsc::channel();
 
     let chunks = (0..frame_count)
         .collect::<Vec<_>>()
-        .chunks((frame_count as usize / n_workers) + 1)
+        .chunks((frame_count as f64 / number_of_chunks as f64).ceil() as usize)
         .map(|chunk| chunk.to_vec())
         .collect::<Vec<_>>();
 
@@ -201,13 +206,17 @@ pub fn extract_colors_threaded_rayon(input: &str) -> Vec<[u8; 3]> {
     let video = VideoCapture::from_file(input, 0).unwrap();
     let (fps, frame_count) = get_video_info(&video);
 
-    debug!(fps, frame_count);
+    let min_chunk_size = fps * 90;
+    let number_of_chunks = std::cmp::min(
+        std::thread::available_parallelism().unwrap().get() - 1,
+        (frame_count as f64 / min_chunk_size as f64).ceil() as usize,
+    );
 
-    let n_workers = std::thread::available_parallelism().unwrap().get() - 1;
+    debug!(fps, frame_count, number_of_chunks);
 
     let chunks = (0..frame_count)
         .collect::<Vec<_>>()
-        .par_chunks((frame_count as usize / n_workers) + 1)
+        .par_chunks((frame_count as f64 / number_of_chunks as f64).ceil() as usize)
         .map(|chunk| chunk.to_owned())
         .collect::<Vec<_>>();
 
