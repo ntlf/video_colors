@@ -1,3 +1,4 @@
+use faiss::Index;
 use opencv::core::no_array;
 use opencv::imgproc::{self, COLOR_BGR2RGB};
 use opencv::prelude::*;
@@ -10,13 +11,94 @@ use std::sync::{Arc, Mutex};
 use threadpool::ThreadPool;
 use tracing::{debug, trace};
 
+#[allow(dead_code)]
+enum ColorMode {
+    Mean = 0,
+    Dominant = 1,
+}
+
 fn get_frame_color(frame: &Mat) -> [u8; 3] {
+    let mode = ColorMode::Mean;
+
+    match mode {
+        ColorMode::Mean => get_mean_color(frame),
+        ColorMode::Dominant => get_dominant_color(frame),
+    }
+}
+
+fn get_mean_color(frame: &Mat) -> [u8; 3] {
     let mut rgb_frame = Mat::default();
     imgproc::cvt_color(&frame, &mut rgb_frame, COLOR_BGR2RGB, 0).unwrap();
 
     let mean = opencv::core::mean(&rgb_frame, &no_array()).unwrap();
 
     [mean[0] as u8, mean[1] as u8, mean[2] as u8]
+}
+
+fn get_dominant_color(frame: &Mat) -> [u8; 3] {
+    let mut rgb_frame = Mat::default();
+    imgproc::cvt_color(&frame, &mut rgb_frame, COLOR_BGR2RGB, 0).unwrap();
+
+    let d = rgb_frame
+        .reshape(1, rgb_frame.total() as i32 * rgb_frame.channels())
+        .unwrap();
+
+    let mut d0 = Mat::default();
+
+    d.convert_to(&mut d0, opencv::core::CV_32F, 1.0, 0.0)
+        .unwrap();
+
+    let d_data = d0.data_typed::<f32>().unwrap();
+
+    const K: u32 = 10;
+
+    let mut params = faiss::cluster::ClusteringParameters::new();
+    params.set_niter(10);
+    params.set_nredo(1);
+    params.set_verbose(false);
+
+    let mut kmeans = faiss::cluster::Clustering::new_with_params(3, K, &params).unwrap();
+    let mut index = faiss::FlatIndex::new(3, faiss::MetricType::L2).unwrap();
+    kmeans.train(d_data, &mut index).unwrap();
+    let faiss::index::SearchResult {
+        distances: _,
+        labels,
+    } = index.search(d_data, 1).unwrap();
+
+    let counts = labels
+        .par_iter()
+        .fold(
+            || [0; K as usize],
+            |mut acc, l| {
+                acc[l.to_native() as usize] += 1;
+                acc
+            },
+        )
+        .reduce(
+            || [0; K as usize],
+            |mut acc1, acc2| {
+                for i in 0..K as usize {
+                    acc1[i] += acc2[i];
+                }
+                acc1
+            },
+        );
+
+    let max = counts
+        .par_iter()
+        .enumerate()
+        .max_by_key(|(_, v)| **v)
+        .unwrap();
+
+    let centroids = kmeans.centroids().unwrap();
+
+    let dominant_color = centroids[max.0];
+
+    [
+        dominant_color[0] as u8,
+        dominant_color[1] as u8,
+        dominant_color[2] as u8,
+    ]
 }
 
 #[derive(Serialize, Deserialize, Debug)]
