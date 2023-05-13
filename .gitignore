@@ -1,5 +1,5 @@
 /target
 
-*.mp4*
+/data
 
 node_modules

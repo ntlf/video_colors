@@ -1,11 +1,9 @@
 use clap::Parser;
+use std::error::Error;
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{debug, info, Level};
-use video_colors::{
-    extract_colors, extract_colors_threaded, extract_colors_threaded_chunks,
-    extract_colors_threaded_rayon, write_colors_to_file,
-};
+use video_colors::{extract_colors, write_colors_to_file};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -17,24 +15,12 @@ struct Cli {
     #[arg(short, long, value_name = "FILE")]
     output: Option<PathBuf>,
 
-    /// Use threaded version of color extraction
-    #[arg(short, long)]
-    threaded: bool,
-
-    /// Use threaded version of color extraction with chunks
-    #[arg(short, long)]
-    chunks: bool,
-
-    /// Use threaded rayon version of color extraction
-    #[arg(short, long)]
-    rayon: bool,
-
     /// Turn debugging information on
     #[arg(short, long, action = clap::ArgAction::Count)]
     debug: u8,
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let timer = Instant::now();
     let args = Cli::parse();
 
@@ -61,27 +47,13 @@ fn main() {
         .into_string()
         .unwrap();
 
-    debug!(
-        input,
-        output,
-        threaded = args.threaded,
-        chunks = args.chunks,
-        rayon = args.rayon
-    );
+    debug!(input, output, debug = args.debug);
 
-    let colors = if args.threaded {
-        if args.rayon {
-            extract_colors_threaded_rayon(&input)
-        } else if args.chunks {
-            extract_colors_threaded_chunks(&input)
-        } else {
-            extract_colors_threaded(&input)
-        }
-    } else {
-        extract_colors(&input)
-    };
+    let colors = extract_colors(&input)?;
 
     write_colors_to_file(&colors, &output);
 
     info!("Done in {:.2?}", timer.elapsed());
+
+    Ok(())
 }

@@ -1,112 +1,62 @@
-use faiss::Index;
 use opencv::core::no_array;
 use opencv::imgproc::{self, COLOR_BGR2RGB};
 use opencv::prelude::*;
-use opencv::videoio::{VideoCapture, CAP_PROP_FPS, CAP_PROP_FRAME_COUNT, CAP_PROP_POS_FRAMES};
+use opencv::videoio::{
+    VideoCapture, CAP_ANY, CAP_PROP_FPS, CAP_PROP_FRAME_COUNT, CAP_PROP_FRAME_HEIGHT,
+    CAP_PROP_FRAME_WIDTH, CAP_PROP_POS_FRAMES,
+};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use threadpool::ThreadPool;
+use std::error::Error;
 use tracing::{debug, trace};
 
-#[allow(dead_code)]
-enum ColorMode {
-    Mean = 0,
-    Dominant = 1,
+#[derive(Debug)]
+struct VideoStats {
+    fps: i32,
+    frame_count: i32,
+    #[allow(dead_code)]
+    width: i32,
+    #[allow(dead_code)]
+    height: i32,
 }
 
-fn get_frame_color(frame: &Mat) -> [u8; 3] {
-    let mode = ColorMode::Mean;
+pub fn extract_colors(input: &str) -> Result<Vec<[u8; 3]>, Box<dyn Error>> {
+    let video = VideoCapture::from_file(input, CAP_ANY)?;
+    let stats = get_stats(&video)?;
 
-    match mode {
-        ColorMode::Mean => get_mean_color(frame),
-        ColorMode::Dominant => get_dominant_color(frame),
-    }
-}
+    debug!(stats = ?stats);
 
-fn get_mean_color(frame: &Mat) -> [u8; 3] {
-    let mut rgb_frame = Mat::default();
-    imgproc::cvt_color(&frame, &mut rgb_frame, COLOR_BGR2RGB, 0).unwrap();
+    let fps = stats.fps;
+    let frame_count = stats.frame_count;
 
-    let mean = opencv::core::mean(&rgb_frame, &no_array()).unwrap();
+    let min_chunk_size = fps * 90;
+    let number_of_chunks = std::cmp::min(
+        std::thread::available_parallelism().unwrap().get() - 1,
+        (frame_count as f64 / min_chunk_size as f64).ceil() as usize,
+    );
 
-    [mean[0] as u8, mean[1] as u8, mean[2] as u8]
-}
+    debug!(number_of_chunks);
 
-fn get_dominant_color(frame: &Mat) -> [u8; 3] {
-    let mut rgb_frame = Mat::default();
-    imgproc::cvt_color(&frame, &mut rgb_frame, COLOR_BGR2RGB, 0).unwrap();
+    let chunks = (0..frame_count)
+        .collect::<Vec<_>>()
+        .par_chunks((frame_count as f64 / number_of_chunks as f64).ceil() as usize)
+        .map(|chunk| chunk.to_owned())
+        .collect::<Vec<_>>();
 
-    let d = rgb_frame
-        .reshape(1, rgb_frame.total() as i32 * rgb_frame.channels())
-        .unwrap();
+    debug!(chunks = ?(chunks.iter().map(|chunk| (chunk[0]..=chunk[chunk.len() - 1])).collect::<Vec<_>>()));
 
-    let mut d0 = Mat::default();
-
-    d.convert_to(&mut d0, opencv::core::CV_32F, 1.0, 0.0)
-        .unwrap();
-
-    let d_data = d0.data_typed::<f32>().unwrap();
-
-    const K: u32 = 10;
-
-    let mut params = faiss::cluster::ClusteringParameters::new();
-    params.set_niter(10);
-    params.set_nredo(1);
-    params.set_verbose(false);
-
-    let mut kmeans = faiss::cluster::Clustering::new_with_params(3, K, &params).unwrap();
-    let mut index = faiss::FlatIndex::new(3, faiss::MetricType::L2).unwrap();
-    kmeans.train(d_data, &mut index).unwrap();
-    let faiss::index::SearchResult {
-        distances: _,
-        labels,
-    } = index.search(d_data, 1).unwrap();
-
-    let counts = labels
+    let colors = chunks
         .par_iter()
-        .fold(
-            || [0; K as usize],
-            |mut acc, l| {
-                acc[l.to_native() as usize] += 1;
-                acc
-            },
-        )
-        .reduce(
-            || [0; K as usize],
-            |mut acc1, acc2| {
-                for i in 0..K as usize {
-                    acc1[i] += acc2[i];
-                }
-                acc1
-            },
-        );
+        .flat_map(|chunk| {
+            let mut video = VideoCapture::from_file(input, CAP_ANY).unwrap();
+            video.set(CAP_PROP_POS_FRAMES, chunk[0] as f64).unwrap();
 
-    let max = counts
-        .par_iter()
-        .enumerate()
-        .max_by_key(|(_, v)| **v)
-        .unwrap();
+            debug!(chunk = ?(chunk[0]..=chunk[chunk.len() - 1]));
 
-    let centroids = kmeans.centroids().unwrap();
+            get_colors(&mut video, &stats, chunk).unwrap()
+        })
+        .collect::<Vec<_>>();
 
-    let dominant_color = centroids[max.0];
-
-    [
-        dominant_color[0] as u8,
-        dominant_color[1] as u8,
-        dominant_color[2] as u8,
-    ]
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Json {
-    colors: Vec<[u8; 3]>,
-}
-
-pub fn write_colors_to_file(colors: &Vec<[u8; 3]>, path: &str) {
     debug!(
         colors = format!(
             "[{}, ... {}]",
@@ -125,39 +75,41 @@ pub fn write_colors_to_file(colors: &Vec<[u8; 3]>, path: &str) {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        path
+        len = colors.len()
     );
 
-    let json = Json {
-        colors: colors.to_owned(),
-    };
-
-    fs::write(path, serde_json::to_string(&json).unwrap()).unwrap();
+    Ok(colors)
 }
 
-fn get_video_info(video: &VideoCapture) -> (i32, i32) {
-    let fps = video.get(CAP_PROP_FPS).unwrap() as i32;
-    let frame_count = video.get(CAP_PROP_FRAME_COUNT).unwrap() as i32;
+fn get_stats(video: &VideoCapture) -> Result<VideoStats, Box<dyn Error>> {
+    let fps = video.get(CAP_PROP_FPS)? as i32;
+    let frame_count = video.get(CAP_PROP_FRAME_COUNT)? as i32;
+    let width = video.get(CAP_PROP_FRAME_WIDTH)? as i32;
+    let height = video.get(CAP_PROP_FRAME_HEIGHT)? as i32;
 
-    (fps, frame_count)
+    Ok(VideoStats {
+        fps,
+        frame_count,
+        width,
+        height,
+    })
 }
 
-pub fn extract_colors(input: &str) -> Vec<[u8; 3]> {
-    let mut video = VideoCapture::from_file(input, 0).unwrap();
+fn get_colors(
+    video: &mut VideoCapture,
+    stats: &VideoStats,
+    chunk: &[i32],
+) -> Result<Vec<[u8; 3]>, Box<dyn Error>> {
+    let fps = stats.fps;
 
-    let (fps, frame_count) = get_video_info(&video);
+    let mut colors = vec![];
 
-    debug!(fps, frame_count);
-
-    let mut colors = Vec::new();
-
-    for i in 0..frame_count {
+    chunk.iter().for_each(|i| {
         if i % fps == 0 {
             let mut frame = Mat::default();
-
             video.read(&mut frame).unwrap();
 
-            let color = get_frame_color(&frame);
+            let color = get_mean_color(&frame).unwrap();
 
             trace!(i, ?color);
 
@@ -165,173 +117,48 @@ pub fn extract_colors(input: &str) -> Vec<[u8; 3]> {
         } else {
             video.grab().unwrap();
         }
-    }
+    });
 
-    colors
+    Ok(colors)
 }
 
-pub fn extract_colors_threaded(input: &str) -> Vec<[u8; 3]> {
-    let video = Arc::new(Mutex::new(VideoCapture::from_file(input, 0).unwrap()));
-    let (fps, frame_count) = get_video_info(&video.lock().unwrap());
+fn get_mean_color(frame: &Mat) -> Result<[u8; 3], Box<dyn Error>> {
+    let mut rgb_frame = Mat::default();
+    imgproc::cvt_color(&frame, &mut rgb_frame, COLOR_BGR2RGB, 0).unwrap();
 
-    debug!(fps, frame_count);
+    let mean = opencv::core::mean(&rgb_frame, &no_array()).unwrap();
 
-    let n_workers = std::thread::available_parallelism().unwrap().get() - 1;
-    let pool = ThreadPool::new(n_workers);
-
-    let (tx, rx) = mpsc::channel();
-
-    for i in 0..frame_count {
-        let tx = tx.clone();
-        let video = video.clone();
-
-        pool.execute(move || {
-            if i % fps == 0 {
-                let mut frame = Mat::default();
-
-                let mut v = video.lock().unwrap();
-
-                v.set(CAP_PROP_POS_FRAMES, i as f64).unwrap();
-                v.read(&mut frame).unwrap();
-
-                drop(v);
-
-                let color = get_frame_color(&frame);
-
-                trace!(i, ?color);
-
-                tx.send((i, color)).unwrap();
-            }
-        });
-    }
-
-    drop(tx);
-
-    let mut messages = rx.iter().collect::<Vec<_>>();
-    messages.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let colors = messages
-        .iter()
-        .map(|(_, color)| color.to_owned())
-        .collect::<Vec<_>>();
-
-    debug!(colors = ?colors);
-
-    colors
+    Ok([mean[0] as u8, mean[1] as u8, mean[2] as u8])
 }
 
-pub fn extract_colors_threaded_chunks(input: &str) -> Vec<[u8; 3]> {
-    let video = VideoCapture::from_file(input, 0).unwrap();
-    let (fps, frame_count) = get_video_info(&video);
-
-    let min_chunk_size = fps * 90;
-    let number_of_chunks = std::cmp::min(
-        std::thread::available_parallelism().unwrap().get() - 1,
-        (frame_count as f64 / min_chunk_size as f64).ceil() as usize,
-    );
-
-    debug!(fps, frame_count, number_of_chunks);
-
-    let pool = ThreadPool::new(number_of_chunks);
-
-    let (tx, rx) = mpsc::channel();
-
-    let chunks = (0..frame_count)
-        .collect::<Vec<_>>()
-        .chunks((frame_count as f64 / number_of_chunks as f64).ceil() as usize)
-        .map(|chunk| chunk.to_vec())
-        .collect::<Vec<_>>();
-
-    debug!(chunks = ?(chunks.iter().map(|chunk| (chunk[0]..chunk[chunk.len() - 1])).collect::<Vec<_>>()));
-
-    for chunk in chunks {
-        let tx = tx.clone();
-        let input = input.to_owned();
-
-        pool.execute(move || {
-            let mut video = VideoCapture::from_file(&input, 0).unwrap();
-            video.set(CAP_PROP_POS_FRAMES, chunk[0] as f64).unwrap();
-
-            debug!(chunk = ?(chunk[0]..chunk[chunk.len() - 1]));
-
-            for i in chunk {
-                if i % fps == 0 {
-                    let mut frame = Mat::default();
-                    video.read(&mut frame).unwrap();
-
-                    let color = get_frame_color(&frame);
-
-                    trace!(i, ?color);
-
-                    tx.send((i, color)).unwrap();
-                } else {
-                    video.grab().unwrap();
-                }
-            }
-        });
+pub fn write_colors_to_file(colors: &Vec<[u8; 3]>, path: &str) {
+    #[derive(Serialize, Deserialize)]
+    struct Json {
+        colors: Vec<[u8; 3]>,
     }
 
-    drop(tx);
+    let json = Json {
+        colors: colors.to_owned(),
+    };
 
-    let mut messages = rx.iter().collect::<Vec<_>>();
-    messages.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let colors = messages
-        .iter()
-        .map(|(_, color)| color.to_owned())
-        .collect::<Vec<_>>();
-
-    colors
+    std::fs::write(path, serde_json::to_string(&json).unwrap()).unwrap();
 }
 
-pub fn extract_colors_threaded_rayon(input: &str) -> Vec<[u8; 3]> {
-    let video = VideoCapture::from_file(input, 0).unwrap();
-    let (fps, frame_count) = get_video_info(&video);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let min_chunk_size = fps * 90;
-    let number_of_chunks = std::cmp::min(
-        std::thread::available_parallelism().unwrap().get() - 1,
-        (frame_count as f64 / min_chunk_size as f64).ceil() as usize,
-    );
+    #[test]
+    fn test_extract_colors() {
+        let colors = extract_colors("input.mp4").unwrap();
 
-    debug!(fps, frame_count, number_of_chunks);
+        assert_eq!(colors.len(), 10);
+    }
 
-    let chunks = (0..frame_count)
-        .collect::<Vec<_>>()
-        .par_chunks((frame_count as f64 / number_of_chunks as f64).ceil() as usize)
-        .map(|chunk| chunk.to_owned())
-        .collect::<Vec<_>>();
+    #[test]
+    fn test_write_colors_to_file() {
+        let colors = extract_colors("input.mp4").unwrap();
 
-    debug!(chunks = ?(chunks.iter().map(|chunk| (chunk[0]..chunk[chunk.len() - 1])).collect::<Vec<_>>()));
-
-    let colors = chunks
-        .par_iter()
-        .flat_map(|chunk| {
-            let mut video = VideoCapture::from_file(input, 0).unwrap();
-            video.set(CAP_PROP_POS_FRAMES, chunk[0] as f64).unwrap();
-
-            debug!(chunk = ?(chunk[0]..chunk[chunk.len() - 1]));
-
-            let mut chunk_colors = vec![];
-
-            chunk.iter().for_each(|i| {
-                if i % fps == 0 {
-                    let mut frame = Mat::default();
-                    video.read(&mut frame).unwrap();
-
-                    let color = get_frame_color(&frame);
-
-                    trace!(i, ?color);
-
-                    chunk_colors.push(color);
-                } else {
-                    video.grab().unwrap();
-                }
-            });
-
-            chunk_colors
-        })
-        .collect::<Vec<_>>();
-
-    colors
+        write_colors_to_file(&colors, "input.mp4.json");
+    }
 }
