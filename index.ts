@@ -34,11 +34,9 @@ async function main() {
     xColors: c.colors,
   });
 
-  pattern.polys
-    // .sort((a, b) => a.centroid.x + a.centroid.y - (b.centroid.x + b.centroid.y))
-    .forEach((p: any, i: number) => {
-      p.color._rgb = [...(c.colors[i] || [0, 0, 0]), 1];
-    });
+  pattern.polys.forEach((p: any, i: number) => {
+    p.color._rgb = [...(c.colors[i] || [0, 0, 0]), 1];
+  });
 
   const canvas = pattern.toCanvas();
 
