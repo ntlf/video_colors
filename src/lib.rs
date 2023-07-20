@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_extract_colors() {
-        let colors = extract_colors("input.mp4").unwrap();
+        let colors = extract_colors("data/input.mp4").unwrap();
 
         assert_eq!(colors.len(), 10);
     }
