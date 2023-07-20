@@ -1,5 +1,9 @@
 /target
 
-/data
+data/*
+!data/input.mp4
+!data/input.mp4.json
+
+!data/example.png
 
 node_modules
