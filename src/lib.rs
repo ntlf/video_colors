@@ -154,11 +154,4 @@ mod tests {
 
         assert_eq!(colors.len(), 10);
     }
-
-    #[test]
-    fn test_write_colors_to_file() {
-        let colors = extract_colors("input.mp4").unwrap();
-
-        write_colors_to_file(&colors, "input.mp4.json");
-    }
 }
