@@ -173,21 +173,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "faiss"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ed83a43b9c84394b72312aa961d24d34f418f7fb19105868a9ee1537a5851c3"
-dependencies = [
- "faiss-sys",
-]
-
-[[package]]
-name = "faiss-sys"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54c3ddf096a623ad11f807ff00725e9e243aa999187cb60f6ecaea83baa6a6e0"
-
-[[package]]
 name = "glob"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -611,15 +596,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "threadpool"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d050e60b33d41c19108b32cea32164033a9013fe3b46cbd4457559bfbf77afaa"
-dependencies = [
- "num_cpus",
-]
-
-[[package]]
 name = "tracing"
 version = "0.1.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -706,12 +682,10 @@ name = "video_colors"
 version = "0.1.0"
 dependencies = [
  "clap",
- "faiss",
  "opencv",
  "rayon",
  "serde",
  "serde_json",
- "threadpool",
  "tracing",
  "tracing-subscriber",
 ]
